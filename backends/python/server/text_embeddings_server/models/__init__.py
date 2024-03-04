@@ -11,6 +11,13 @@ from text_embeddings_server.models.default_model import DefaultModel
 
 __all__ = ["Model"]
 
+HTCORE_AVAILABLE = True
+try:
+    import habana_frameworks.torch.core as htcore
+except ImportError as e:
+    logger.warning(f"Could not import htcore: {e}")
+    HTCORE_AVAILABLE = False
+
 # Disable gradients
 torch.set_grad_enabled(False)
 
@@ -37,6 +44,8 @@ def get_model(model_path: Path, dtype: Optional[str]):
 
     if torch.cuda.is_available():
         device = torch.device("cuda")
+    elif HTCORE_AVAILABLE and torch.hpu.is_available():
+        device = torch.device("hpu")
     else:
         if dtype != torch.float32:
             raise ValueError("CPU device only supports float32 dtype")
