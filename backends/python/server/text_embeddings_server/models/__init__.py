@@ -64,5 +64,9 @@ def get_model(model_path: Path, dtype: Optional[str]):
             return FlashBert(model_path, device, dtype)
         else:
             return DefaultModel(model_path, device, dtype)
+    else:
+        try:
+            return DefaultModel(model_path, device, dtype)
+        except:
+            raise RuntimeError(f"Unknown model_type {config.model_type}")
 
-    raise NotImplementedError
