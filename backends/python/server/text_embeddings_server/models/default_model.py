@@ -1,10 +1,14 @@
 import inspect
 import torch
 
+from loguru import logger
 from pathlib import Path
 from typing import Type, List
 from transformers import AutoModel
 from opentelemetry import trace
+
+from habana_frameworks.torch.hpu import wrap_in_hpu_graph
+from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 
 from text_embeddings_server.models import Model
 from text_embeddings_server.models.types import PaddedBatch, Embedding
@@ -14,7 +18,12 @@ tracer = trace.get_tracer(__name__)
 
 class DefaultModel(Model):
     def __init__(self, model_path: Path, device: torch.device, dtype: torch.dtype):
+        if device == torch.device("hpu"):
+            adapt_transformers_to_gaudi()
         model = AutoModel.from_pretrained(model_path).to(dtype).to(device)
+        if device == torch.device("hpu"):
+            logger.info("Use graph mode for HPU")
+            model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
         self.hidden_size = model.config.hidden_size
 
         self.has_position_ids = (
