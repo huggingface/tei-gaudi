@@ -12,6 +12,7 @@ pub enum DType {
         all(feature = "candle", not(feature = "accelerate"))
     ))]
     Float16,
+    BFloat16,
     // Float32 is not available on candle cuda
     #[cfg(any(feature = "python", feature = "candle"))]
     Float32,
@@ -28,6 +29,7 @@ impl fmt::Display for DType {
                 all(feature = "candle", not(feature = "accelerate"))
             ))]
             DType::Float16 => write!(f, "float16"),
+            DType::BFloat16 => write!(f, "bfloat16"),
             // Float32 is not available on candle cuda
             #[cfg(any(feature = "python", feature = "candle"))]
             DType::Float32 => write!(f, "float32"),
