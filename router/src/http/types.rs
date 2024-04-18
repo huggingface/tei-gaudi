@@ -196,9 +196,8 @@ impl<'__s> ToSchema<'__s> for PredictInput {
 #[derive(Deserialize, ToSchema)]
 pub(crate) struct PredictRequest {
     pub inputs: PredictInput,
-    #[serde(default)]
-    #[schema(default = "false", example = "false")]
-    pub truncate: bool,
+    #[schema(default = "false", example = "false", nullable = true)]
+    pub truncate: Option<bool>,
     #[serde(default)]
     #[schema(default = "false", example = "false")]
     pub raw_scores: bool,
@@ -226,8 +225,8 @@ pub(crate) struct RerankRequest {
     #[schema(example = json!(["Deep Learning is ..."]))]
     pub texts: Vec<String>,
     #[serde(default)]
-    #[schema(default = "false", example = "false")]
-    pub truncate: bool,
+    #[schema(default = "false", example = "false", nullable = true)]
+    pub truncate: Option<bool>,
     #[serde(default)]
     #[schema(default = "false", example = "false")]
     pub raw_scores: bool,
@@ -250,11 +249,33 @@ pub(crate) struct Rank {
 #[derive(Serialize, ToSchema)]
 pub(crate) struct RerankResponse(pub Vec<Rank>);
 
+#[derive(Deserialize, ToSchema, Debug)]
+#[serde(untagged)]
+pub(crate) enum InputType {
+    String(String),
+    Ids(Vec<u32>),
+}
+impl InputType {
+    pub(crate) fn count_chars(&self) -> usize {
+        match self {
+            InputType::String(s) => s.chars().count(),
+            InputType::Ids(v) => v.len(),
+        }
+    }
+}
+impl From<InputType> for EncodingInput {
+    fn from(value: InputType) -> Self {
+        match value {
+            InputType::String(s) => Self::Single(s),
+            InputType::Ids(v) => Self::Ids(v),
+        }
+    }
+}
 #[derive(Deserialize, ToSchema)]
 #[serde(untagged)]
 pub(crate) enum Input {
-    Single(String),
-    Batch(Vec<String>),
+    Single(InputType),
+    Batch(Vec<InputType>),
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -300,8 +321,8 @@ pub(crate) struct OpenAICompatResponse {
 pub(crate) struct EmbedRequest {
     pub inputs: Input,
     #[serde(default)]
-    #[schema(default = "false", example = "false")]
-    pub truncate: bool,
+    #[schema(default = "false", example = "false", nullable = true)]
+    pub truncate: Option<bool>,
     #[serde(default = "default_normalize")]
     #[schema(default = "true", example = "true")]
     pub normalize: bool,
@@ -316,11 +337,28 @@ fn default_normalize() -> bool {
 pub(crate) struct EmbedResponse(pub Vec<Vec<f32>>);
 
 #[derive(Deserialize, ToSchema)]
+pub(crate) struct EmbedSparseRequest {
+    pub inputs: Input,
+    #[serde(default)]
+    #[schema(default = "false", example = "false", nullable = true)]
+    pub truncate: Option<bool>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct SparseValue {
+    pub index: usize,
+    pub value: f32,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct EmbedSparseResponse(pub Vec<Vec<SparseValue>>);
+
+#[derive(Deserialize, ToSchema)]
 pub(crate) struct EmbedAllRequest {
     pub inputs: Input,
     #[serde(default)]
-    #[schema(default = "false", example = "false")]
-    pub truncate: bool,
+    #[schema(default = "false", example = "false", nullable = true)]
+    pub truncate: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -336,8 +374,15 @@ pub(crate) struct OpenAICompatErrorResponse {
 }
 
 #[derive(Deserialize, ToSchema)]
+#[serde(untagged)]
+pub(crate) enum TokenizeInput {
+    Single(String),
+    Batch(Vec<String>),
+}
+
+#[derive(Deserialize, ToSchema)]
 pub(crate) struct TokenizeRequest {
-    pub inputs: Input,
+    pub inputs: TokenizeInput,
     #[serde(default = "default_add_special_tokens")]
     #[schema(default = "true", example = "true")]
     pub add_special_tokens: bool,
@@ -364,3 +409,45 @@ pub(crate) struct SimpleToken {
 #[derive(Serialize, ToSchema)]
 #[schema(example = json!([[{"id": 0, "text": "test", "special": false, "start": 0, "stop": 2}]]))]
 pub(crate) struct TokenizeResponse(pub Vec<Vec<SimpleToken>>);
+
+#[derive(Deserialize, ToSchema)]
+#[serde(untagged)]
+pub(crate) enum InputIds {
+    Single(Vec<u32>),
+    Batch(Vec<Vec<u32>>),
+}
+
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct DecodeRequest {
+    pub ids: InputIds,
+    #[serde(default = "default_skip_special_tokens")]
+    #[schema(default = "true", example = "true")]
+    pub skip_special_tokens: bool,
+}
+
+fn default_skip_special_tokens() -> bool {
+    true
+}
+
+#[derive(Serialize, ToSchema)]
+#[schema(example = json!(["test"]))]
+pub(crate) struct DecodeResponse(pub Vec<String>);
+
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct VertexRequest {
+    pub instances: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(untagged)]
+pub(crate) enum VertexPrediction {
+    Embed(EmbedResponse),
+    EmbedSparse(EmbedSparseResponse),
+    Predict(PredictResponse),
+    Rerank(RerankResponse),
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct VertexResponse {
+    pub predictions: Vec<VertexPrediction>,
+}

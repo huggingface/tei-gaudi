@@ -34,17 +34,17 @@ model=BAAI/bge-large-en-v1.5
 revision=refs/pr/5
 volume=$PWD/data
 
-docker run --gpus all -p 8080:80 -v $volume:/data --pull always ghcr.io/huggingface/text-embeddings-inference:1.1 --model-id $model --revision $revision
+docker run --gpus all -p 8080:80 -v $volume:/data --pull always ghcr.io/huggingface/text-embeddings-inference:1.2 --model-id $model --revision $revision
 ```
 
 <Tip>
 
-Here we pass a `revision=refs/pr/5`, because the `safetensors` variant of this model is currently in a pull request.
+Here we pass a `revision=refs/pr/5` because the `safetensors` variant of this model is currently in a pull request.
 We also recommend sharing a volume with the Docker container (`volume=$PWD/data`) to avoid downloading weights every run.
 
 </Tip>
 
-Once you have deployed a model you can use the `embed` endpoint by sending requests:
+Once you have deployed a model, you can use the `embed` endpoint by sending requests:
 
 ```bash
 curl 127.0.0.1:8080/embed \
@@ -69,10 +69,10 @@ model=BAAI/bge-reranker-large
 revision=refs/pr/4
 volume=$PWD/data
 
-docker run --gpus all -p 8080:80 -v $volume:/data --pull always ghcr.io/huggingface/text-embeddings-inference:1.1 --model-id $model --revision $revision
+docker run --gpus all -p 8080:80 -v $volume:/data --pull always ghcr.io/huggingface/text-embeddings-inference:1.2 --model-id $model --revision $revision
 ```
 
-Once you have deployed a model you can use the `rerank` endpoint to rank the similarity between a query and a list
+Once you have deployed a model, you can use the `rerank` endpoint to rank the similarity between a query and a list
 of texts:
 
 ```bash
@@ -90,7 +90,7 @@ You can also use classic Sequence Classification models like `SamLowe/roberta-ba
 model=SamLowe/roberta-base-go_emotions
 volume=$PWD/data
 
-docker run --gpus all -p 8080:80 -v $volume:/data --pull always ghcr.io/huggingface/text-embeddings-inference:1.1 --model-id $model
+docker run --gpus all -p 8080:80 -v $volume:/data --pull always ghcr.io/huggingface/text-embeddings-inference:1.2 --model-id $model
 ```
 
 Once you have deployed the model you can use the `predict` endpoint to get the emotions most associated with an input:
@@ -99,5 +99,25 @@ Once you have deployed the model you can use the `predict` endpoint to get the e
 curl 127.0.0.1:8080/predict \
     -X POST \
     -d '{"inputs":"I like you."}' \
+    -H 'Content-Type: application/json'
+```
+
+## Batching
+
+You can send multiple inputs in a batch. For example, for embeddings
+
+```bash
+curl 127.0.0.1:8080/embed \
+    -X POST \
+    -d '{"inputs":["Today is a nice day", "I like you"]}' \
+    -H 'Content-Type: application/json'
+```
+
+And for Sequence Classification:
+
+```bash
+curl 127.0.0.1:8080/predict \
+    -X POST \
+    -d '{"inputs":[["I like you."], ["I hate pineapples"]]}' \
     -H 'Content-Type: application/json'
 ```

@@ -51,11 +51,14 @@ pub async fn run(
     max_batch_tokens: usize,
     max_batch_requests: Option<usize>,
     max_client_batch_size: usize,
+    auto_truncate: bool,
     hf_api_token: Option<String>,
     hostname: Option<String>,
     port: u16,
     uds_path: Option<String>,
     huggingface_hub_cache: Option<String>,
+    payload_limit: usize,
+    api_key: Option<String>,
     otlp_endpoint: Option<String>,
     cors_allow_origin: Option<Vec<String>>,
 ) -> Result<()> {
@@ -234,9 +237,24 @@ pub async fn run(
         tokenization_workers,
         max_batch_requests,
         max_client_batch_size,
+        auto_truncate,
         version: env!("CARGO_PKG_VERSION"),
         sha: option_env!("VERGEN_GIT_SHA"),
         docker_label: option_env!("DOCKER_LABEL"),
+    };
+
+    // use AIP_HTTP_PORT if google feature is enabled
+    let port = if cfg!(feature = "google") {
+        std::env::var("AIP_HTTP_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .map(|p| {
+                tracing::info!("`AIP_HTTP_PORT` is set: overriding port {port} by port {p}");
+                p
+            })
+            .unwrap_or(port)
+    } else {
+        port
     };
 
     let addr = match hostname.unwrap_or("0.0.0.0".to_string()).parse() {
@@ -252,26 +270,32 @@ pub async fn run(
     #[cfg(all(feature = "grpc", feature = "http"))]
     compile_error!("Features `http` and `grpc` cannot be enabled at the same time.");
 
+    #[cfg(all(feature = "grpc", feature = "google"))]
+    compile_error!("Features `http` and `google` cannot be enabled at the same time.");
+
     #[cfg(not(any(feature = "http", feature = "grpc")))]
     compile_error!("Either feature `http` or `grpc` must be enabled.");
 
     #[cfg(feature = "http")]
     {
-        let server = tokio::spawn(async move {
-            http::server::run(infer, info, addr, prom_builder, cors_allow_origin).await
-        });
-        tracing::info!("Ready");
-        server.await??;
+        http::server::run(
+            infer,
+            info,
+            addr,
+            prom_builder,
+            payload_limit,
+            api_key,
+            cors_allow_origin,
+        )
+        .await?;
     }
 
     #[cfg(feature = "grpc")]
     {
-        // cors_allow_origin is not used for gRPC servers
+        // cors_allow_origin and payload_limit are not used for gRPC servers
         let _ = cors_allow_origin;
-        let server =
-            tokio::spawn(async move { grpc::server::run(infer, info, addr, prom_builder).await });
-        tracing::info!("Ready");
-        server.await??;
+        let _ = payload_limit;
+        grpc::server::run(infer, info, addr, prom_builder, api_key).await?;
     }
 
     Ok(())
@@ -402,6 +426,7 @@ pub struct Info {
     pub max_batch_requests: Option<usize>,
     #[cfg_attr(feature = "http", schema(example = "32"))]
     pub max_client_batch_size: usize,
+    pub auto_truncate: bool,
     #[cfg_attr(feature = "http", schema(example = "4"))]
     pub tokenization_workers: usize,
     /// Router Info

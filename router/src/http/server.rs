@@ -1,9 +1,11 @@
 /// HTTP Server logic
 use crate::http::types::{
-    EmbedAllRequest, EmbedAllResponse, EmbedRequest, EmbedResponse, Input, OpenAICompatEmbedding,
+    DecodeRequest, DecodeResponse, EmbedAllRequest, EmbedAllResponse, EmbedRequest, EmbedResponse,
+    EmbedSparseRequest, EmbedSparseResponse, Input, InputIds, InputType, OpenAICompatEmbedding,
     OpenAICompatErrorResponse, OpenAICompatRequest, OpenAICompatResponse, OpenAICompatUsage,
     PredictInput, PredictRequest, PredictResponse, Prediction, Rank, RerankRequest, RerankResponse,
-    Sequence, SimpleToken, TokenizeRequest, TokenizeResponse,
+    Sequence, SimpleToken, SparseValue, TokenizeInput, TokenizeRequest, TokenizeResponse,
+    VertexPrediction, VertexRequest, VertexResponse,
 };
 use crate::{
     shutdown, ClassifierModel, EmbeddingModel, ErrorResponse, ErrorType, Info, ModelType,
@@ -11,19 +13,21 @@ use crate::{
 };
 use ::http::HeaderMap;
 use anyhow::Context;
-use axum::extract::Extension;
+use axum::extract::{DefaultBodyLimit, Extension};
 use axum::http::HeaderValue;
 use axum::http::{Method, StatusCode};
 use axum::routing::{get, post};
 use axum::{http, Json, Router};
 use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 use futures::future::join_all;
+use futures::FutureExt;
+use http::header::AUTHORIZATION;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use text_embeddings_backend::BackendError;
 use text_embeddings_core::infer::{
-    AllEmbeddingsInferResponse, Infer, PooledEmbeddingsInferResponse,
+    AllEmbeddingsInferResponse, Infer, InferMetadata, PooledEmbeddingsInferResponse,
 };
 use text_embeddings_core::TextEmbeddingsError;
 use tokio::sync::OwnedSemaphorePermit;
@@ -147,6 +151,8 @@ async fn predict(
         ))
     };
 
+    let truncate = req.truncate.unwrap_or(info.auto_truncate);
+
     let (response, metadata) = match req.inputs {
         PredictInput::Single(inputs) => {
             metrics::increment_counter!("te_request_count", "method" => "single");
@@ -155,7 +161,7 @@ async fn predict(
             let permit = infer.try_acquire_permit().map_err(ErrorResponse::from)?;
             let (prompt_tokens, tokenization, queue, inference, predictions) = predict_inner(
                 inputs,
-                req.truncate,
+                truncate,
                 req.raw_scores,
                 infer.0,
                 info.0,
@@ -204,7 +210,7 @@ async fn predict(
                 let local_info = info.clone();
                 futures.push(predict_inner(
                     input,
-                    req.truncate,
+                    truncate,
                     req.raw_scores,
                     local_infer.0,
                     local_info.0,
@@ -338,6 +344,8 @@ async fn rerank(
         ))
     };
 
+    let truncate = req.truncate.unwrap_or(info.auto_truncate);
+
     let (response, metadata) = {
         metrics::increment_counter!("te_request_count", "method" => "batch");
 
@@ -366,7 +374,7 @@ async fn rerank(
             futures.push(rerank_inner(
                 req.query.clone(),
                 text.clone(),
-                req.truncate,
+                truncate,
                 req.raw_scores,
                 local_infer.0,
             ))
@@ -466,15 +474,17 @@ async fn embed(
     let span = tracing::Span::current();
     let start_time = Instant::now();
 
+    let truncate = req.truncate.unwrap_or(info.auto_truncate);
+
     let (response, metadata) = match req.inputs {
         Input::Single(input) => {
             metrics::increment_counter!("te_request_count", "method" => "single");
 
-            let compute_chars = input.chars().count();
+            let compute_chars = input.count_chars();
 
             let permit = infer.try_acquire_permit().map_err(ErrorResponse::from)?;
             let response = infer
-                .embed_pooled(input, req.truncate, req.normalize, permit)
+                .embed_pooled(input, truncate, req.normalize, permit)
                 .await
                 .map_err(ErrorResponse::from)?;
 
@@ -525,13 +535,13 @@ async fn embed(
             let mut compute_chars = 0;
 
             for input in inputs {
-                compute_chars += input.chars().count();
+                compute_chars += input.count_chars();
 
                 let local_infer = infer.clone();
                 futures.push(async move {
                     let permit = local_infer.acquire_permit().await;
                     local_infer
-                        .embed_pooled(input, req.truncate, req.normalize, permit)
+                        .embed_pooled(input, truncate, req.normalize, permit)
                         .await
                 })
             }
@@ -560,6 +570,162 @@ async fn embed(
 
             (
                 EmbedResponse(embeddings),
+                ResponseMetadata::new(
+                    compute_chars,
+                    total_compute_tokens,
+                    start_time,
+                    Duration::from_nanos(total_tokenization_time / batch_size),
+                    Duration::from_nanos(total_queue_time / batch_size),
+                    Duration::from_nanos(total_inference_time / batch_size),
+                ),
+            )
+        }
+    };
+
+    metadata.record_span(&span);
+    metadata.record_metrics();
+
+    let headers = HeaderMap::from(metadata);
+
+    tracing::info!("Success");
+
+    Ok((headers, Json(response)))
+}
+
+/// Get Sparse Embeddings. Returns a 424 status code if the model is not an embedding model with SPLADE pooling.
+#[utoipa::path(
+post,
+tag = "Text Embeddings Inference",
+path = "/embed_sparse",
+request_body = EmbedSparseRequest,
+responses(
+(status = 200, description = "Embeddings", body = EmbedSparseResponse),
+(status = 424, description = "Embedding Error", body = ErrorResponse,
+example = json ! ({"error": "Inference failed", "error_type": "backend"})),
+(status = 429, description = "Model is overloaded", body = ErrorResponse,
+example = json ! ({"error": "Model is overloaded", "error_type": "overloaded"})),
+(status = 422, description = "Tokenization error", body = ErrorResponse,
+example = json ! ({"error": "Tokenization error", "error_type": "tokenizer"})),
+(status = 413, description = "Batch size error", body = ErrorResponse,
+example = json ! ({"error": "Batch size error", "error_type": "validation"})),
+)
+)]
+#[instrument(
+    skip_all,
+    fields(total_time, tokenization_time, queue_time, inference_time,)
+)]
+async fn embed_sparse(
+    infer: Extension<Infer>,
+    info: Extension<Info>,
+    Json(req): Json<EmbedSparseRequest>,
+) -> Result<(HeaderMap, Json<EmbedSparseResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let span = tracing::Span::current();
+    let start_time = Instant::now();
+
+    let sparsify = |values: Vec<f32>| {
+        let mut sparse_values = Vec::with_capacity(values.len());
+        for (index, value) in values.into_iter().enumerate() {
+            if value != 0.0 {
+                sparse_values.push(SparseValue { index, value });
+            }
+        }
+        sparse_values
+    };
+    let truncate = req.truncate.unwrap_or(info.auto_truncate);
+
+    let (response, metadata) = match req.inputs {
+        Input::Single(input) => {
+            metrics::increment_counter!("te_request_count", "method" => "single");
+
+            let compute_chars = input.count_chars();
+
+            let permit = infer.try_acquire_permit().map_err(ErrorResponse::from)?;
+            let response = infer
+                .embed_sparse(input, truncate, permit)
+                .await
+                .map_err(ErrorResponse::from)?;
+
+            metrics::increment_counter!("te_request_success", "method" => "single");
+
+            (
+                EmbedSparseResponse(vec![sparsify(response.results)]),
+                ResponseMetadata::new(
+                    compute_chars,
+                    response.metadata.prompt_tokens,
+                    start_time,
+                    response.metadata.tokenization,
+                    response.metadata.queue,
+                    response.metadata.inference,
+                ),
+            )
+        }
+        Input::Batch(inputs) => {
+            metrics::increment_counter!("te_request_count", "method" => "batch");
+
+            if inputs.is_empty() {
+                let message = "`inputs` cannot be empty".to_string();
+                tracing::error!("{message}");
+                let err = ErrorResponse {
+                    error: message,
+                    error_type: ErrorType::Validation,
+                };
+                metrics::increment_counter!("te_request_failure", "err" => "validation");
+                Err(err)?;
+            }
+
+            let batch_size = inputs.len();
+            if batch_size > info.max_client_batch_size {
+                let message = format!(
+                    "batch size {batch_size} > maximum allowed batch size {}",
+                    info.max_client_batch_size
+                );
+                tracing::error!("{message}");
+                let err = ErrorResponse {
+                    error: message,
+                    error_type: ErrorType::Validation,
+                };
+                metrics::increment_counter!("te_request_failure", "err" => "batch_size");
+                Err(err)?;
+            }
+
+            let mut futures = Vec::with_capacity(batch_size);
+            let mut compute_chars = 0;
+
+            for input in inputs {
+                compute_chars += input.count_chars();
+
+                let local_infer = infer.clone();
+                futures.push(async move {
+                    let permit = local_infer.acquire_permit().await;
+                    let response = local_infer.embed_sparse(input, truncate, permit).await?;
+                    Ok((sparsify(response.results), response.metadata))
+                })
+            }
+            let results = join_all(futures)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<(Vec<SparseValue>, InferMetadata)>, TextEmbeddingsError>>()
+                .map_err(ErrorResponse::from)?;
+
+            let mut embeddings = Vec::with_capacity(batch_size);
+            let mut total_tokenization_time = 0;
+            let mut total_queue_time = 0;
+            let mut total_inference_time = 0;
+            let mut total_compute_tokens = 0;
+
+            for r in results {
+                total_tokenization_time += r.1.tokenization.as_nanos() as u64;
+                total_queue_time += r.1.queue.as_nanos() as u64;
+                total_inference_time += r.1.inference.as_nanos() as u64;
+                total_compute_tokens += r.1.prompt_tokens;
+                embeddings.push(r.0);
+            }
+            let batch_size = batch_size as u64;
+
+            metrics::increment_counter!("te_request_success", "method" => "batch");
+
+            (
+                EmbedSparseResponse(embeddings),
                 ResponseMetadata::new(
                     compute_chars,
                     total_compute_tokens,
@@ -613,15 +779,17 @@ async fn embed_all(
     let span = tracing::Span::current();
     let start_time = Instant::now();
 
+    let truncate = req.truncate.unwrap_or(info.auto_truncate);
+
     let (response, metadata) = match req.inputs {
         Input::Single(input) => {
             metrics::increment_counter!("te_request_count", "method" => "single");
 
-            let compute_chars = input.chars().count();
+            let compute_chars = input.count_chars();
 
             let permit = infer.try_acquire_permit().map_err(ErrorResponse::from)?;
             let response = infer
-                .embed_all(input, req.truncate, permit)
+                .embed_all(input, truncate, permit)
                 .await
                 .map_err(ErrorResponse::from)?;
 
@@ -672,12 +840,12 @@ async fn embed_all(
             let mut compute_chars = 0;
 
             for input in inputs {
-                compute_chars += input.chars().count();
+                compute_chars += input.count_chars();
 
                 let local_infer = infer.clone();
                 futures.push(async move {
                     let permit = local_infer.acquire_permit().await;
-                    local_infer.embed_all(input, req.truncate, permit).await
+                    local_infer.embed_all(input, truncate, permit).await
                 })
             }
             let results = join_all(futures)
@@ -731,7 +899,7 @@ async fn embed_all(
 #[utoipa::path(
 post,
 tag = "Text Embeddings Inference",
-path = "/embeddings",
+path = "/v1/embeddings",
 request_body = OpenAICompatRequest,
 responses(
 (status = 200, description = "Embeddings", body = OpenAICompatResponse),
@@ -758,15 +926,17 @@ async fn openai_embed(
     let span = tracing::Span::current();
     let start_time = Instant::now();
 
+    let truncate = info.auto_truncate;
+
     let (embeddings, metadata) = match req.input {
         Input::Single(input) => {
             metrics::increment_counter!("te_request_count", "method" => "single");
 
-            let compute_chars = input.chars().count();
+            let compute_chars = input.count_chars();
 
             let permit = infer.try_acquire_permit().map_err(ErrorResponse::from)?;
             let response = infer
-                .embed_pooled(input, false, true, permit)
+                .embed_pooled(input, truncate, true, permit)
                 .await
                 .map_err(ErrorResponse::from)?;
 
@@ -821,12 +991,14 @@ async fn openai_embed(
             let mut compute_chars = 0;
 
             for input in inputs {
-                compute_chars += input.chars().count();
+                compute_chars += input.count_chars();
 
                 let local_infer = infer.clone();
                 futures.push(async move {
                     let permit = local_infer.acquire_permit().await;
-                    local_infer.embed_pooled(input, false, true, permit).await
+                    local_infer
+                        .embed_pooled(input, truncate, true, permit)
+                        .await
                 })
             }
             let results = join_all(futures)
@@ -898,7 +1070,7 @@ path = "/tokenize",
 request_body = TokenizeRequest,
 responses(
 (status = 200, description = "Tokenized ids", body = TokenizeResponse),
-(status = 422, description = "Tokenization error", body = OpenAICompatErrorResponse,
+(status = 422, description = "Tokenization error", body = ErrorResponse,
 example = json ! ({"message": "Tokenization error", "type": "tokenizer"})),
 )
 )]
@@ -946,8 +1118,10 @@ async fn tokenize(
     };
 
     let tokens = match req.inputs {
-        Input::Single(input) => vec![tokenize_inner(input, req.add_special_tokens, infer.0).await?],
-        Input::Batch(inputs) => {
+        TokenizeInput::Single(input) => {
+            vec![tokenize_inner(input, req.add_special_tokens, infer.0).await?]
+        }
+        TokenizeInput::Batch(inputs) => {
             if inputs.is_empty() {
                 let message = "`inputs` cannot be empty".to_string();
                 tracing::error!("{message}");
@@ -992,6 +1166,158 @@ async fn tokenize(
     Ok(Json(TokenizeResponse(tokens)))
 }
 
+/// Decode input ids
+#[utoipa::path(
+post,
+tag = "Text Embeddings Inference",
+path = "/decode",
+request_body = DecodeRequest,
+responses(
+(status = 200, description = "Decoded ids", body = DecodeResponse),
+(status = 422, description = "Tokenization error", body = ErrorResponse,
+example = json ! ({"message": "Tokenization error", "type": "tokenizer"})),
+)
+)]
+#[instrument(skip_all)]
+async fn decode(
+    infer: Extension<Infer>,
+    info: Extension<Info>,
+    Json(req): Json<DecodeRequest>,
+) -> Result<Json<DecodeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let decode_inner = move |ids: Vec<u32>, skip_special_tokens: bool, infer: Infer| async move {
+        let text = infer
+            .decode(ids, skip_special_tokens)
+            .await
+            .map_err(ErrorResponse::from)?;
+        Ok::<String, ErrorResponse>(text)
+    };
+
+    let texts = match req.ids {
+        InputIds::Single(ids) => vec![decode_inner(ids, req.skip_special_tokens, infer.0).await?],
+        InputIds::Batch(ids) => {
+            if ids.is_empty() {
+                let message = "`ids` cannot be empty".to_string();
+                tracing::error!("{message}");
+                let err = ErrorResponse {
+                    error: message,
+                    error_type: ErrorType::Validation,
+                };
+                metrics::increment_counter!("te_request_failure", "err" => "validation");
+                Err(err)?;
+            }
+
+            let batch_size = ids.len();
+            if batch_size > info.max_client_batch_size {
+                let message = format!(
+                    "batch size {batch_size} > maximum allowed batch size {}",
+                    info.max_client_batch_size
+                );
+                tracing::error!("{message}");
+                let err = ErrorResponse {
+                    error: message,
+                    error_type: ErrorType::Validation,
+                };
+                metrics::increment_counter!("te_request_failure", "err" => "batch_size");
+                Err(err)?;
+            }
+
+            let mut futures = Vec::with_capacity(batch_size);
+            for ids in ids {
+                futures.push(decode_inner(ids, req.skip_special_tokens, infer.0.clone()));
+            }
+
+            join_all(futures)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<String>, ErrorResponse>>()?
+        }
+    };
+    Ok(Json(DecodeResponse(texts)))
+}
+
+/// Generate embeddings from a Vertex request
+#[utoipa::path(
+post,
+tag = "Text Embeddings Inference",
+path = "/vertex",
+request_body = VertexRequest,
+responses(
+(status = 200, description = "Results"),
+(status = 424, description = "Error", body = ErrorResponse,
+example = json ! ({"error": "Inference failed", "error_type": "backend"})),
+(status = 429, description = "Model is overloaded", body = ErrorResponse,
+example = json ! ({"error": "Model is overloaded", "error_type": "overloaded"})),
+(status = 422, description = "Tokenization error", body = ErrorResponse,
+example = json ! ({"error": "Tokenization error", "error_type": "tokenizer"})),
+(status = 413, description = "Batch size error", body = ErrorResponse,
+example = json ! ({"error": "Batch size error", "error_type": "validation"})),
+)
+)]
+#[instrument(skip_all)]
+async fn vertex_compatibility(
+    infer: Extension<Infer>,
+    info: Extension<Info>,
+    Json(req): Json<VertexRequest>,
+) -> Result<Json<VertexResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let embed_future = move |infer: Extension<Infer>, info: Extension<Info>, req: EmbedRequest| async move {
+        let result = embed(infer, info, Json(req)).await?;
+        Ok(VertexPrediction::Embed(result.1 .0))
+    };
+    let embed_sparse_future =
+        move |infer: Extension<Infer>, info: Extension<Info>, req: EmbedSparseRequest| async move {
+            let result = embed_sparse(infer, info, Json(req)).await?;
+            Ok(VertexPrediction::EmbedSparse(result.1 .0))
+        };
+    let predict_future =
+        move |infer: Extension<Infer>, info: Extension<Info>, req: PredictRequest| async move {
+            let result = predict(infer, info, Json(req)).await?;
+            Ok(VertexPrediction::Predict(result.1 .0))
+        };
+    let rerank_future =
+        move |infer: Extension<Infer>, info: Extension<Info>, req: RerankRequest| async move {
+            let result = rerank(infer, info, Json(req)).await?;
+            Ok(VertexPrediction::Rerank(result.1 .0))
+        };
+
+    let mut futures = Vec::with_capacity(req.instances.len());
+    for instance in req.instances {
+        let local_infer = infer.clone();
+        let local_info = info.clone();
+
+        // Rerank is the only payload that can me matched safely
+        if let Ok(instance) = serde_json::from_value::<RerankRequest>(instance.clone()) {
+            futures.push(rerank_future(local_infer, local_info, instance).boxed());
+            continue;
+        }
+
+        match info.model_type {
+            ModelType::Classifier(_) | ModelType::Reranker(_) => {
+                let instance = serde_json::from_value::<PredictRequest>(instance)
+                    .map_err(ErrorResponse::from)?;
+                futures.push(predict_future(local_infer, local_info, instance).boxed());
+            }
+            ModelType::Embedding(_) => {
+                if infer.is_splade() {
+                    let instance = serde_json::from_value::<EmbedSparseRequest>(instance)
+                        .map_err(ErrorResponse::from)?;
+                    futures.push(embed_sparse_future(local_infer, local_info, instance).boxed());
+                } else {
+                    let instance = serde_json::from_value::<EmbedRequest>(instance)
+                        .map_err(ErrorResponse::from)?;
+                    futures.push(embed_future(local_infer, local_info, instance).boxed());
+                }
+            }
+        }
+    }
+
+    let predictions = join_all(futures)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<VertexPrediction>, (StatusCode, Json<ErrorResponse>)>>()?;
+
+    Ok(Json(VertexResponse { predictions }))
+}
+
 /// Prometheus metrics scrape endpoint
 #[utoipa::path(
 get,
@@ -1009,6 +1335,8 @@ pub async fn run(
     info: Info,
     addr: SocketAddr,
     prom_builder: PrometheusBuilder,
+    payload_limit: usize,
+    api_key: Option<String>,
     cors_allow_origin: Option<Vec<String>>,
 ) -> Result<(), anyhow::Error> {
     // OpenAPI documentation
@@ -1021,8 +1349,10 @@ pub async fn run(
     rerank,
     embed,
     embed_all,
+    embed_sparse,
     openai_embed,
     tokenize,
+    decode,
     metrics,
     ),
     components(
@@ -1042,6 +1372,9 @@ pub async fn run(
     OpenAICompatResponse,
     EmbedAllRequest,
     EmbedAllResponse,
+    EmbedSparseRequest,
+    SparseValue,
+    EmbedSparseResponse,
     RerankRequest,
     Rank,
     RerankResponse,
@@ -1049,9 +1382,14 @@ pub async fn run(
     EmbedResponse,
     ErrorResponse,
     OpenAICompatErrorResponse,
+    TokenizeInput,
     TokenizeRequest,
     TokenizeResponse,
     SimpleToken,
+    InputType,
+    InputIds,
+    DecodeRequest,
+    DecodeResponse,
     ErrorType,
     )
     ),
@@ -1061,7 +1399,8 @@ pub async fn run(
     info(
     title = "Text Embeddings Inference",
     license(
-    name = "HFOIL",
+    name = "Apache 2.0",
+    url = "https://www.apache.org/licenses/LICENSE-2.0"
     )
     )
     )]
@@ -1089,18 +1428,45 @@ pub async fn run(
         .allow_headers([http::header::CONTENT_TYPE])
         .allow_origin(allow_origin);
 
+    // Define VertextApiDoc conditionally only if the "google" feature is enabled
+    let doc = {
+        // avoid `mut` if possible
+        #[cfg(feature = "google")]
+        {
+            #[derive(OpenApi)]
+            #[openapi(
+                paths(vertex_compatibility),
+                components(schemas(VertexRequest, VertexResponse, VertexPrediction))
+            )]
+            struct VertextApiDoc;
+
+            // limiting mutability to the smallest scope necessary
+            let mut doc = ApiDoc::openapi();
+            doc.merge(VertextApiDoc::openapi());
+            doc
+        }
+        #[cfg(not(feature = "google"))]
+        ApiDoc::openapi()
+    };
+
     // Create router
-    let app = Router::new()
-        .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", ApiDoc::openapi()))
+    let mut app = Router::new()
+        .layer(DefaultBodyLimit::max(payload_limit))
+        .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
         // Base routes
         .route("/info", get(get_model_info))
         .route("/embed", post(embed))
         .route("/embed_all", post(embed_all))
+        .route("/embed_sparse", post(embed_sparse))
         .route("/predict", post(predict))
         .route("/rerank", post(rerank))
         .route("/tokenize", post(tokenize))
+        .route("/decode", post(decode))
         // OpenAI compat route
         .route("/embeddings", post(openai_embed))
+        .route("/v1/embeddings", post(openai_embed))
+        // Vertex compat route
+        .route("/vertex", post(vertex_compatibility))
         // Base Health route
         .route("/health", get(health))
         // Inference API health route
@@ -1110,34 +1476,82 @@ pub async fn run(
         // Prometheus metrics route
         .route("/metrics", get(metrics));
 
-    // Set default routes
-    let app = match &info.model_type {
-        ModelType::Classifier(_) => {
-            app.route("/", post(predict))
-                // AWS Sagemaker route
-                .route("/invocations", post(predict))
-        }
-        ModelType::Reranker(_) => {
-            app.route("/", post(rerank))
-                // AWS Sagemaker route
-                .route("/invocations", post(rerank))
-        }
-        ModelType::Embedding(_) => {
-            app.route("/", post(embed))
-                // AWS Sagemaker route
-                .route("/invocations", post(embed))
-        }
-    };
+    #[cfg(feature = "google")]
+    {
+        tracing::info!("Built with `google` feature");
 
-    let app = app
+        if let Ok(env_predict_route) = std::env::var("AIP_PREDICT_ROUTE") {
+            tracing::info!("Serving Vertex compatible route on {env_predict_route}");
+            app = app.route(&env_predict_route, post(vertex_compatibility));
+        }
+
+        if let Ok(env_health_route) = std::env::var("AIP_HEALTH_ROUTE") {
+            tracing::info!("Serving Vertex compatible health route on {env_health_route}");
+            app = app.route(&env_health_route, get(health));
+        }
+    }
+    #[cfg(not(feature = "google"))]
+    {
+        // Set default routes
+        app = match &info.model_type {
+            ModelType::Classifier(_) => {
+                app.route("/", post(predict))
+                    // AWS Sagemaker route
+                    .route("/invocations", post(predict))
+            }
+            ModelType::Reranker(_) => {
+                app.route("/", post(rerank))
+                    // AWS Sagemaker route
+                    .route("/invocations", post(rerank))
+            }
+            ModelType::Embedding(model) => {
+                if model.pooling == "splade" {
+                    app.route("/", post(embed_sparse))
+                        // AWS Sagemaker route
+                        .route("/invocations", post(embed_sparse))
+                } else {
+                    app.route("/", post(embed))
+                        // AWS Sagemaker route
+                        .route("/invocations", post(embed))
+                }
+            }
+        };
+    }
+
+    app = app
         .layer(Extension(infer))
         .layer(Extension(info))
         .layer(Extension(prom_handle.clone()))
         .layer(OtelAxumLayer::default())
         .layer(cors_layer);
 
+    if let Some(api_key) = api_key {
+        let mut prefix = "Bearer ".to_string();
+        prefix.push_str(&api_key);
+
+        // Leak to allow FnMut
+        let api_key: &'static str = prefix.leak();
+
+        let auth = move |headers: HeaderMap,
+                         request: axum::extract::Request,
+                         next: axum::middleware::Next| async move {
+            match headers.get(AUTHORIZATION) {
+                Some(token) if token == api_key => {
+                    let response = next.run(request).await;
+                    Ok(response)
+                }
+                _ => Err(StatusCode::UNAUTHORIZED),
+            }
+        };
+
+        app = app.layer(axum::middleware::from_fn(auth));
+    }
+
     // Run server
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+
+    tracing::info!("Starting HTTP server: {}", &addr);
+    tracing::info!("Ready");
 
     axum::serve(listener, app)
         // Wait until all requests are finished to shut down
@@ -1179,5 +1593,14 @@ impl From<ErrorResponse> for (StatusCode, Json<ErrorResponse>) {
 impl From<ErrorResponse> for (StatusCode, Json<OpenAICompatErrorResponse>) {
     fn from(err: ErrorResponse) -> Self {
         (StatusCode::from(&err.error_type), Json(err.into()))
+    }
+}
+
+impl From<serde_json::Error> for ErrorResponse {
+    fn from(err: serde_json::Error) -> Self {
+        ErrorResponse {
+            error: err.to_string(),
+            error_type: ErrorType::Validation,
+        }
     }
 }
