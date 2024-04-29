@@ -12,7 +12,7 @@ text-embeddings-backend-python = { path = "python", optional = true }
 text-embeddings-backend-candle = { path = "candle", optional = true }
 tokio = { version = "^1.25", features = ["sync"] }
 tracing = "^0.1"
-
+rand = "^0.8"
 [features]
 clap = ["dep:clap", "text-embeddings-backend-core/clap"]
 python = ["dep:text-embeddings-backend-python"]
