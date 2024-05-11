@@ -101,27 +101,35 @@ impl Backend {
     #[instrument(skip(self))]
     pub async fn warmup(
         &self,
-        max_input_length: u32,
+        mut max_input_length: u32,
         max_token: u32,
     ) -> Result<(), BackendError> {
         let read_env_var = |key: &str, default: u32| -> u32 {
             env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
         };
-        // get all possible sequence lengths for prefill
-        let bucket_size: u32 = read_env_var("PAD_SEQUENCE_TO_MULTIPLE_OF", 128);
-        let mut seq_lengths: Vec<u32> = (bucket_size..max_input_length+1).step_by(bucket_size as usize).collect();
+        let seq_bucket_size: u32 = read_env_var("PAD_SEQUENCE_TO_MULTIPLE_OF", 128);
+        let max_warmup_length: u32 = read_env_var("MAX_WARMUP_SEQUENCE_LENGTH", 1024);
+        max_input_length = std::cmp::min(max_input_length, max_warmup_length);
+        let mut seq_lengths: Vec<u32> = (seq_bucket_size..max_input_length+1).step_by(seq_bucket_size as usize).collect();
         if let Some(&last) = seq_lengths.last() {
             if last < max_input_length {
                 seq_lengths.push(max_input_length);
             }
         }
         for &length in seq_lengths.iter() {
-            tracing::info!("warmup for length: {}", length);
             let batch = self.create_warmup_batch(length, max_token);
-            match &self.model_type {
+            let ret = match &self.model_type {
                 ModelType::Classifier => self.predict(batch).await.map(|_| ()),
                 ModelType::Embedding(_) => self.embed(batch).await.map(|_| ()),
             };
+            match ret {
+                Ok(()) => {
+                    tracing::info!("finish warmup for length: {}", length);
+                },
+                _ => {
+                    return ret;
+                }
+            }
         }
         Ok(())
     }
