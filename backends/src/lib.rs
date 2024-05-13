@@ -118,18 +118,11 @@ impl Backend {
         }
         for &length in seq_lengths.iter() {
             let batch = self.create_warmup_batch(length, max_token);
-            let ret = match &self.model_type {
+            match &self.model_type {
                 ModelType::Classifier => self.predict(batch).await.map(|_| ()),
                 ModelType::Embedding(_) => self.embed(batch).await.map(|_| ()),
-            };
-            match ret {
-                Ok(()) => {
-                    tracing::info!("finish warmup for length: {}", length);
-                },
-                _ => {
-                    return ret;
-                }
-            }
+            }?;
+            tracing::info!("finish warmup for length: {}", length);
         }
         Ok(())
     }
