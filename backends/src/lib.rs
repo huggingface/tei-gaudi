@@ -138,10 +138,10 @@ impl Backend {
         let position_ids: Vec<u32> = (0..length).collect();
         let cumulative_seq_lengths: Vec<u32> = vec![0, length - 1];
         Batch {
-            input_ids: input_ids,
-            token_type_ids: token_type_ids,
-            position_ids: position_ids,
-            cumulative_seq_lengths: cumulative_seq_lengths,
+            input_ids,
+            token_type_ids,
+            position_ids,
+            cumulative_seq_lengths,
             max_length: length,
             pooled_indices: vec![0],
             raw_indices: vec![],
