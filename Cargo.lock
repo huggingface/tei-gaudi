@@ -3540,6 +3540,7 @@ name = "text-embeddings-backend"
 version = "1.2.2"
 dependencies = [
  "clap",
+ "rand",
  "text-embeddings-backend-candle",
  "text-embeddings-backend-core",
  "text-embeddings-backend-python",
