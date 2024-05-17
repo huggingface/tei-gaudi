@@ -170,7 +170,6 @@ impl Backend {
         let input_ids: Vec<u32> = (0..length).map(|_| rand::thread_rng().gen_range(0..max_token)).collect();
         let token_type_ids: Vec<u32> = vec![0; length as usize];
         let position_ids: Vec<u32> = (0..length).collect();
-        let cu_seq_lengths: Vec<u32> = vec![0, length - 1];
         let mut current_length = 0;
         for batch_id in 0..batch_size {
             batched_input_ids.extend(input_ids.iter().cloned());
