@@ -1,5 +1,3 @@
-use std::env::set_var;
-
 use anyhow::Result;
 use clap::Parser;
 use mimalloc::MiMalloc;
@@ -128,11 +126,6 @@ struct Args {
     /// Unused for gRPC servers
     #[clap(long, env)]
     cors_allow_origin: Option<Vec<String>>,
-
-    /// Set the PYTHON_SERVER_MIN_PADDING environment variable. This increases the minimum
-    /// token padding for a batched input in the python server.
-    #[clap(long, env)]
-    python_min_padding: Option<u16>
 }
 
 #[tokio::main]
@@ -145,10 +138,6 @@ async fn main() -> Result<()> {
         text_embeddings_router::init_logging(args.otlp_endpoint.as_ref(), args.json_output);
 
     tracing::info!("{args:?}");
-
-    if let Some(min_padded_batch) = args.python_min_padding {
-        set_var("PYTHON_SERVER_MIN_PADDING", min_padded_batch.to_string())
-    }
 
     text_embeddings_router::run(
         args.model_id,
