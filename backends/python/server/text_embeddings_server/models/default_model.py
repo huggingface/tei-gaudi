@@ -25,7 +25,16 @@ class DefaultModel(Model):
             logger.info("Use graph mode for HPU")
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
         self.hidden_size = model.config.hidden_size
-
+        position_offset = 0
+        model_type = model.config.model_type
+        if model_type in ["xlm-roberta", "camembert", "roberta"]:
+            position_offset = model.config.pad_token_id + 1
+        max_input_length = 0
+        if hasattr(model.config, "max_seq_length"):
+            max_input_length = model.config.max_seq_length
+        else:
+            max_input_length = model.config.max_position_embeddings - position_offset
+        self.max_input_length = max_input_length
         self.has_position_ids = (
             inspect.signature(model.forward).parameters.get("position_ids", None)
             is not None
