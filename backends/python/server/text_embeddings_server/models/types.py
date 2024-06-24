@@ -34,8 +34,15 @@ class PaddedBatch(Batch):
 
     @classmethod
     @tracer.start_as_current_span("from_pb")
-    def from_pb(cls, pb: embed_pb2.EmbedRequest, device: torch.device) -> "PaddedBatch":
+    def from_pb(cls,
+                pb: embed_pb2.EmbedRequest,
+                device: torch.device,
+                max_input_length: int) -> "PaddedBatch":
+        if pb.max_length > max_input_length:
+            raise RuntimeError(f"input length exceeds model config's max_input_length")
+
         max_length = round_up(pb.max_length, PAD_SEQUENCE_TO_MULTIPLE_OF)
+        max_length = min(max_length, max_input_length)
         batch_size = len(pb.cu_seq_lengths) - 1
         new_bs = 2 ** math.ceil(math.log2(batch_size))
         # Allocate padded tensors all at once
