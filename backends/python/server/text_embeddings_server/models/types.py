@@ -1,4 +1,3 @@
-import math
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -37,10 +36,9 @@ class PaddedBatch(Batch):
     def from_pb(cls, pb: embed_pb2.EmbedRequest, device: torch.device) -> "PaddedBatch":
         max_length = round_up(pb.max_length, PAD_SEQUENCE_TO_MULTIPLE_OF)
         batch_size = len(pb.cu_seq_lengths) - 1
-        new_bs = 2 ** math.ceil(math.log2(batch_size))
         # Allocate padded tensors all at once
         all_tensors = torch.zeros(
-            [4, new_bs, max_length], dtype=torch.int32
+            [4, batch_size, max_length], dtype=torch.int32
         )
         for i, start_index in enumerate(pb.cu_seq_lengths[:-1]):
             end_index = pb.cu_seq_lengths[i + 1]
