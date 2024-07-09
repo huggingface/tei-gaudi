@@ -136,15 +136,15 @@ impl Backend {
         }
         if max_warmup_length > max_input_length {
             return Err(BackendError::Start(
-                "max_warmup_length exceeds model's max_input_length".to_string()
+                format!("max_warmup_length ({max_warmup_length}) exceeds model's max_input_length ({max_input_length}), you can modify this value adding `-e MAX_WARMUP_SEQUENCE_LENGTH=<new_warmup_length>` to your Docker run command")
             ));
         }
         if seq_bucket_size > max_warmup_length {
             return Err(BackendError::Start(
-                "PAD_SEQUENCE_TO_MULTIPLE_OF exceeds model's max warmup length".to_string()
+                format!("PAD_SEQUENCE_TO_MULTIPLE_OF ({seq_bucket_size}) exceeds model's max warmup length ({max_warmup_length}), you can modify these values adding `-e PAD_SEQUENCE_TO_MULTIPLE_OF=<new_value>` or `-e MAX_WARMUP_SEQUENCE_LENGTH=<new_value> to your Docker run command`")
             ));
         }
-  
+
         max_input_length = std::cmp::min(max_input_length, max_warmup_length);
         let mut seq_lengths: Vec<u32> = (seq_bucket_size..max_input_length+1).step_by(seq_bucket_size as usize).collect();
         if let Some(&last) = seq_lengths.last() {
