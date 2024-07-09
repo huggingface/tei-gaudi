@@ -16,7 +16,7 @@ To use [🤗 text-embeddings-inference](https://github.com/huggingface/text-embe
    model=BAAI/bge-large-en-v1.5
    volume=$PWD/data # share a volume with the Docker container to avoid downloading weights every run
 
-   docker run -p 8080:80 -v $volume:/data --runtime=habana -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none -e MAX_WARMUP_SEQUENCE_LENGTH=512 --cap-add=sys_nice --ipc=host tei_gaudi --model-id $model --pooling cls
+   docker run -p 8080:80 -v $volume:/data --runtime=habana -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none -e MAX_WARMUP_SEQUENCE_LENGTH=512 --cap-add=sys_nice --ipc=host ghcr.io/huggingface/tei-gaudi:latest --model-id $model --pooling cls
    ```
 3. You can then send a request:
    ```bash
