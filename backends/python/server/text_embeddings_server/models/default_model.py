@@ -17,10 +17,14 @@ tracer = trace.get_tracer(__name__)
 
 
 class DefaultModel(Model):
-    def __init__(self, model_path: Path, device: torch.device, dtype: torch.dtype):
+    def __init__(self,
+                model_path: Path,
+                device: torch.device,
+                dtype: torch.dtype,
+                trust_remote: bool=False):
         if device == torch.device("hpu"):
             adapt_transformers_to_gaudi()
-        model = AutoModel.from_pretrained(model_path).to(dtype).to(device)
+        model = AutoModel.from_pretrained(model_path, trust_remote_code=trust_remote).to(dtype).to(device)
         if device == torch.device("hpu"):
             logger.info("Use graph mode for HPU")
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)

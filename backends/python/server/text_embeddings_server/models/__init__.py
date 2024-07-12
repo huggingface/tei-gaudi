@@ -1,3 +1,4 @@
+import os
 import torch
 
 from loguru import logger
@@ -12,6 +13,8 @@ from text_embeddings_server.models.default_model import DefaultModel
 __all__ = ["Model"]
 
 HTCORE_AVAILABLE = True
+TRUST_REMOTE_CODE = os.getenv("TRUST_REMOTE_CODE", "false").lower() in ["true", "1"]
+
 try:
     import habana_frameworks.torch.core as htcore
 except ImportError as e:
@@ -51,7 +54,7 @@ def get_model(model_path: Path, dtype: Optional[str]):
             raise ValueError("CPU device only supports float32 dtype")
         device = torch.device("cpu")
 
-    config = AutoConfig.from_pretrained(model_path)
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=TRUST_REMOTE_CODE)
 
     if config.model_type == "bert":
         config: BertConfig
@@ -63,10 +66,10 @@ def get_model(model_path: Path, dtype: Optional[str]):
         ):
             return FlashBert(model_path, device, dtype)
         else:
-            return DefaultModel(model_path, device, dtype)
+            return DefaultModel(model_path, device, dtype, trust_remote=TRUST_REMOTE_CODE)
     else:
         try:
-            return DefaultModel(model_path, device, dtype)
+            return DefaultModel(model_path, device, dtype, trust_remote=TRUST_REMOTE_CODE)
         except:
             raise RuntimeError(f"Unknown model_type {config.model_type}")
 
