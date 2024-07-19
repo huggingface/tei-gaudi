@@ -26,15 +26,13 @@ impl PythonBackend {
     ) -> Result<Self, BackendError> {
         match model_type {
             ModelType::Classifier => {
-                return Err(BackendError::Start(
-                    "`classifier` model type is not supported".to_string(),
-                ))
+                None
             }
             ModelType::Embedding(pool) => {
                 if pool != Pool::Cls {
                     return Err(BackendError::Start(format!("{pool:?} is not supported")));
                 }
-                pool
+                Some(pool)
             }
         };
 
@@ -110,8 +108,31 @@ impl Backend for PythonBackend {
     }
 
     fn predict(&self, _batch: Batch) -> Result<Predictions, BackendError> {
-        Err(BackendError::Inference(
-            "`predict` is not implemented".to_string(),
-        ))
+        if !_batch.raw_indices.is_empty() {
+            return Err(BackendError::Inference(
+                "raw embeddings are not supported for the Python backend.".to_string(),
+            ));
+        }
+        let batch_size = _batch.len();
+        let results = self
+            .tokio_runtime
+            .block_on(self.backend_client.clone().predict(
+                _batch.input_ids,
+                _batch.token_type_ids,
+                _batch.position_ids,
+                _batch.cumulative_seq_lengths,
+                _batch.max_length,
+            ))
+            .map_err(|err| BackendError::Inference(err.to_string()))?;
+        let raw_results: Vec<Vec<f32>> = results.into_iter().map(|r| r.values).collect();
+
+        let mut predictions =
+                HashMap::with_capacity_and_hasher(batch_size, BuildNoHashHasher::default());
+
+        for (i, r) in raw_results.into_iter().enumerate() {
+            predictions.insert(i, r);
+        }
+
+        Ok(predictions)
     }
 }

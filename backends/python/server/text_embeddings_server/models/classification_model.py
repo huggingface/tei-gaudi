@@ -4,7 +4,7 @@ import torch
 from loguru import logger
 from pathlib import Path
 from typing import Type, List
-from transformers import AutoModel
+from transformers import AutoModelForSequenceClassification
 from opentelemetry import trace
 
 from habana_frameworks.torch.hpu import wrap_in_hpu_graph
@@ -15,19 +15,17 @@ from text_embeddings_server.models.types import PaddedBatch, Embedding, Score
 
 tracer = trace.get_tracer(__name__)
 
-
-class DefaultModel(Model):
-    def __init__(self,
-                model_path: Path,
-                device: torch.device,
-                dtype: torch.dtype,
-                trust_remote: bool=False):
+class ClassificationModel(Model):
+    def __init__(self, model_path: Path, device: torch.device, dtype: torch.dtype):
         if device == torch.device("hpu"):
             adapt_transformers_to_gaudi()
-        model = AutoModel.from_pretrained(model_path, trust_remote_code=trust_remote).to(dtype).to(device)
+
+        model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        model = model.to(dtype).to(device)
         if device == torch.device("hpu"):
             logger.info("Use graph mode for HPU")
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+
         self.hidden_size = model.config.hidden_size
         position_offset = 0
         model_type = model.config.model_type
@@ -48,31 +46,29 @@ class DefaultModel(Model):
             is not None
         )
 
-        super(DefaultModel, self).__init__(model=model, dtype=dtype, device=device)
+        super(ClassificationModel, self).__init__(model=model, dtype=dtype, device=device)
 
     @property
     def batch_type(self) -> Type[PaddedBatch]:
         return PaddedBatch
-
+    
     @tracer.start_as_current_span("embed")
     def embed(self, batch: PaddedBatch) -> List[Embedding]:
+        pass
+
+    @tracer.start_as_current_span("predict")
+    def predict(self, batch: PaddedBatch) -> List[Score]:
         kwargs = {"input_ids": batch.input_ids, "attention_mask": batch.attention_mask}
         if self.has_token_type_ids:
             kwargs["token_type_ids"] = batch.token_type_ids
         if self.has_position_ids:
             kwargs["position_ids"] = batch.position_ids
 
-        output = self.model(**kwargs)
-        embedding = output[0][:, 0]
-        cpu_results = embedding.reshape(-1).tolist()
-
+        output = self.model(**kwargs, return_dict=True)
+        scores = output.logits.view(-1, ).tolist()
         return [
-            Embedding(
-                values=cpu_results[i * self.hidden_size : (i + 1) * self.hidden_size]
+            Score(
+                values=scores[i:i+1]
             )
             for i in range(len(batch))
         ]
-
-    @tracer.start_as_current_span("predict")
-    def predict(self, batch: PaddedBatch) -> List[Score]:
-        pass
