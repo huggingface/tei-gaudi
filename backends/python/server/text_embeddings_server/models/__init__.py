@@ -80,4 +80,3 @@ def get_model(model_path: Path, dtype: Optional[str]):
                 return DefaultModel(model_path, device, dtype, trust_remote=TRUST_REMOTE_CODE)
         except:
             raise RuntimeError(f"Unsupported model_type {config.model_type}")
-

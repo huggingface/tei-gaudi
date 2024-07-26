@@ -51,7 +51,7 @@ class ClassificationModel(Model):
     @property
     def batch_type(self) -> Type[PaddedBatch]:
         return PaddedBatch
-    
+
     @tracer.start_as_current_span("embed")
     def embed(self, batch: PaddedBatch) -> List[Embedding]:
         pass

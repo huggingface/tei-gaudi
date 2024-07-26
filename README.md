@@ -44,4 +44,3 @@ Not all features of TEI are currently supported as this is still a work in progr
 > The license to use TEI on Habana Gaudi is the one of TEI: https://github.com/huggingface/text-embeddings-inference/blob/main/LICENSE
 >
 > Please reach out to api-enterprise@huggingface.co if you have any question.
-
