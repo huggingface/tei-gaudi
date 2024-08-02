@@ -177,6 +177,15 @@ fn queue_blocking_task(
                     if Some(metadata.len()) == max_batch_requests {
                         break;
                     }
+                    // Break if not able to fill the next power of 2 batch
+                    let next_pow_2 = if metadata.len() & (metadata.len() - 1) == 0 {
+                        metadata.len()
+                    } else {
+                        2_usize.pow((metadata.len() as f32).log2().ceil() as u32) - metadata.len()
+                    };
+                    if entries.len() < next_pow_2 {
+                        break;
+                    }
                 }
 
                 let batch_size = metadata.len();
