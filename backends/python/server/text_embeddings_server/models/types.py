@@ -17,7 +17,7 @@ def round_up(number, k):
 class Batch(ABC):
     @classmethod
     @abstractmethod
-    def from_pb(cls, pb: embed_pb2.EmbedRequest, device: torch.device) -> "Batch":
+    def from_pb(cls, pb: embed_pb2.EmbedRequest, device: torch.device, *args, **kwargs) -> "Batch":
         raise NotImplementedError
 
     @abstractmethod

@@ -25,14 +25,11 @@ impl PythonBackend {
         otlp_service_name: String,
     ) -> Result<Self, BackendError> {
         match model_type {
-            ModelType::Classifier => {
-                None
-            }
+            ModelType::Classifier => {}
             ModelType::Embedding(pool) => {
                 if pool != Pool::Cls {
                     return Err(BackendError::Start(format!("{pool:?} is not supported")));
                 }
-                Some(pool)
             }
         };
 

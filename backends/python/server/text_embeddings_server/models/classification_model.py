@@ -11,9 +11,10 @@ from habana_frameworks.torch.hpu import wrap_in_hpu_graph
 from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 
 from text_embeddings_server.models import Model
-from text_embeddings_server.models.types import PaddedBatch, Embedding, Score
+from text_embeddings_server.models.types import PaddedBatch, Score
 
 tracer = trace.get_tracer(__name__)
+
 
 class ClassificationModel(Model):
     def __init__(self, model_path: Path, device: torch.device, dtype: torch.dtype):
@@ -46,15 +47,17 @@ class ClassificationModel(Model):
             is not None
         )
 
-        super(ClassificationModel, self).__init__(model=model, dtype=dtype, device=device)
+        super(ClassificationModel, self).__init__(
+            model=model, dtype=dtype, device=device
+        )
 
     @property
     def batch_type(self) -> Type[PaddedBatch]:
         return PaddedBatch
 
     @tracer.start_as_current_span("embed")
-    def embed(self, batch: PaddedBatch) -> List[Embedding]:
-        pass
+    def embed(self, batch):
+        raise NotImplementedError(f"Embed is not a valid operation for model type {self.model.config.model_type}")
 
     @tracer.start_as_current_span("predict")
     def predict(self, batch: PaddedBatch) -> List[Score]:
@@ -65,10 +68,5 @@ class ClassificationModel(Model):
             kwargs["position_ids"] = batch.position_ids
 
         output = self.model(**kwargs, return_dict=True)
-        scores = output.logits.view(-1, ).tolist()
-        return [
-            Score(
-                values=scores[i:i+1]
-            )
-            for i in range(len(batch))
-        ]
+        all_scores = output.logits.tolist()
+        return [Score(values=scores) for scores in all_scores]
