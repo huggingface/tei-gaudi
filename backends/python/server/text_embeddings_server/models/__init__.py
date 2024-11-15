@@ -4,7 +4,7 @@ import torch
 from loguru import logger
 from pathlib import Path
 from typing import Optional
-from transformers import AutoConfig
+from transformers import AutoConfig, BertForMaskedLM
 from transformers.models.bert import BertConfig
 from transformers.models.auto.modeling_auto import (
     MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES,
@@ -77,6 +77,10 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
                 in MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.values()
             ):
                 return ClassificationModel(model_path, device, dtype)
+            elif config.architectures[0] == "BertForMaskedLM":
+                return DefaultModel(
+                    model_path, device, dtype, pool, trust_remote=TRUST_REMOTE_CODE, model_class=BertForMaskedLM
+                )
             else:
                 return DefaultModel(
                     model_path, device, dtype, pool, trust_remote=TRUST_REMOTE_CODE

@@ -24,15 +24,9 @@ impl PythonBackend {
         otlp_endpoint: Option<String>,
         otlp_service_name: String,
     ) -> Result<Self, BackendError> {
-        let mut pool_type = Pool::Cls;
-        match model_type {
-            ModelType::Classifier => {}
-            ModelType::Embedding(pool) => {
-                if pool == Pool::Splade {
-                    return Err(BackendError::Start(format!("{pool:?} is not supported")));
-                }
-                pool_type = pool;
-            }
+        let pool_type = match model_type {
+            ModelType::Classifier => Pool::Cls,
+            ModelType::Embedding(pool) => pool,
         };
 
         let backend_process = management::BackendProcess::new(
