@@ -4,7 +4,6 @@ import torch
 from opentelemetry import trace
 from sentence_transformers.models import Pooling
 from torch import Tensor
-import torch
 
 tracer = trace.get_tracer(__name__)
 

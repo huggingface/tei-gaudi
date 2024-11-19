@@ -25,12 +25,12 @@ class DefaultModel(Model):
         dtype: torch.dtype,
         pool: str = "cls",
         trust_remote: bool = False,
-        model_class: type[PreTrainedModel] = AutoModel,
+        model_class: type[PreTrainedModel] = AutoModel,  # type: ignore
     ):
         if device == torch.device("hpu"):
             adapt_transformers_to_gaudi()
         model = (
-            model_class.from_pretrained(model_path, trust_remote_code=trust_remote)
+            model_class.from_pretrained(model_path, trust_remote_code=trust_remote)  # type: ignore
             .to(dtype=dtype)
             .to(device=device)
         )
@@ -39,7 +39,8 @@ class DefaultModel(Model):
             logger.info("Use graph mode for HPU")
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
         self.hidden_size = model.config.hidden_size
-        logger.info(f"Initializing pooling {pool}")
+        self.vocab_size = model.config.vocab_size
+        self.pooling_mode = pool
         if pool == "splade":
             self.pooling = SpladePooling()
         else:
@@ -79,13 +80,18 @@ class DefaultModel(Model):
 
         output = self.model(**kwargs)
         embedding = self.pooling.forward(output, batch.attention_mask)
-        logger.info(f"Embedding (shape {embedding.shape}): {embedding}")
         cpu_results = embedding.reshape(-1).tolist()
-
+        step_size = embedding.shape[-1]
+        if self.pooling_mode == "splade":
+            assert (
+                step_size == self.vocab_size
+            ), f"Step size for splade pooling expected vocab size ({self.vocab_size}) but got {step_size}. Check splade pooling implementation"
+        else:
+            assert (
+                step_size == self.hidden_size
+            ), f"Step size expected hidden size ({self.hidden_size}) but got {step_size}. Please check model outputs."
         return [
-            Embedding(
-                values=cpu_results[i * self.hidden_size : (i + 1) * self.hidden_size]
-            )
+            Embedding(values=cpu_results[i * step_size : (i + 1) * step_size])
             for i in range(len(batch))
         ]
 
