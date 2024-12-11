@@ -6,9 +6,6 @@ from pathlib import Path
 from typing import Optional
 from transformers import AutoConfig, BertForMaskedLM
 from transformers.models.bert import BertConfig
-from transformers.models.auto.modeling_auto import (
-    MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES,
-)
 
 from text_embeddings_server.models.model import Model, B
 from text_embeddings_server.models.default_model import DefaultModel
@@ -72,14 +69,16 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
                 raise ValueError("FlashBert only supports cls pooling")
             return FlashBert(model_path, device, dtype)
         else:
-            if (
-                config.architectures[0]
-                in MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.values()
-            ):
+            if config.architectures[0].endswith("Classification"):
                 return ClassificationModel(model_path, device, dtype)
             elif config.architectures[0] == "BertForMaskedLM":
                 return DefaultModel(
-                    model_path, device, dtype, pool, trust_remote=TRUST_REMOTE_CODE, model_class=BertForMaskedLM
+                    model_path,
+                    device,
+                    dtype,
+                    pool,
+                    trust_remote=TRUST_REMOTE_CODE,
+                    model_class=BertForMaskedLM,
                 )
             else:
                 return DefaultModel(
@@ -87,10 +86,7 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
                 )
     else:
         try:
-            if (
-                config.architectures[0]
-                in MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.values()
-            ):
+            if config.architectures[0].endswith("Classification"):
                 return ClassificationModel(model_path, device, dtype)
             else:
                 return DefaultModel(
