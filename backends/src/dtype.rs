@@ -52,7 +52,7 @@ impl Default for DType {
             feature = "ort"
         )))]
         {
-            DType::Float16
+            DType::BFloat16
         }
     }
 }
