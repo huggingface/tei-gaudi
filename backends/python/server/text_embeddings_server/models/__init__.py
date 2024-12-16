@@ -15,6 +15,10 @@ __all__ = ["Model"]
 
 HTCORE_AVAILABLE = True
 TRUST_REMOTE_CODE = os.getenv("TRUST_REMOTE_CODE", "false").lower() in ["true", "1"]
+DISABLE_TENSOR_CACHE = os.getenv("DISABLE_TENSOR_CACHE", "false").lower() in [
+    "true",
+    "1",
+]
 
 try:
     import habana_frameworks.torch.core as htcore
@@ -71,7 +75,11 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
         else:
             if config.architectures[0].endswith("Classification"):
                 return ClassificationModel(
-                    model_path, device, dtype, trust_remote=TRUST_REMOTE_CODE
+                    model_path,
+                    device,
+                    dtype,
+                    disable_tensor_cache=DISABLE_TENSOR_CACHE,
+                    trust_remote=TRUST_REMOTE_CODE,
                 )
             elif config.architectures[0] == "BertForMaskedLM":
                 return DefaultModel(
@@ -84,17 +92,31 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
                 )
             else:
                 return DefaultModel(
-                    model_path, device, dtype, pool, trust_remote=TRUST_REMOTE_CODE
+                    model_path,
+                    device,
+                    dtype,
+                    pool,
+                    disable_tensor_cache=DISABLE_TENSOR_CACHE,
+                    trust_remote=TRUST_REMOTE_CODE,
                 )
     else:
         try:
             if config.architectures[0].endswith("Classification"):
                 return ClassificationModel(
-                    model_path, device, dtype, trust_remote=TRUST_REMOTE_CODE
+                    model_path,
+                    device,
+                    dtype,
+                    disable_tensor_cache=DISABLE_TENSOR_CACHE,
+                    trust_remote=TRUST_REMOTE_CODE,
                 )
             else:
                 return DefaultModel(
-                    model_path, device, dtype, pool, trust_remote=TRUST_REMOTE_CODE
+                    model_path,
+                    device,
+                    dtype,
+                    pool,
+                    disable_tensor_cache=DISABLE_TENSOR_CACHE,
+                    trust_remote=TRUST_REMOTE_CODE,
                 )
         except:
             raise RuntimeError(f"Unsupported model_type {config.model_type}")

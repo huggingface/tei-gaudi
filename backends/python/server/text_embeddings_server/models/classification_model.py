@@ -22,6 +22,7 @@ class ClassificationModel(Model):
         model_path: Path,
         device: torch.device,
         dtype: torch.dtype,
+        disable_tensor_cache: bool = False,
         trust_remote: bool = False,
     ):
         if device == torch.device("hpu"):
@@ -33,7 +34,7 @@ class ClassificationModel(Model):
         model = model.to(dtype).to(device)
         if device == torch.device("hpu"):
             logger.info("Use graph mode for HPU")
-            model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+            model = wrap_in_hpu_graph(model, disable_tensor_cache=disable_tensor_cache)
 
         self.hidden_size = model.config.hidden_size
         position_offset = 0

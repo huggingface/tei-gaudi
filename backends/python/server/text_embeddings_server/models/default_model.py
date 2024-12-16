@@ -24,6 +24,7 @@ class DefaultModel(Model):
         device: torch.device,
         dtype: torch.dtype,
         pool: str = "cls",
+        disable_tensor_cache: bool = False,
         trust_remote: bool = False,
         model_class: type[PreTrainedModel] = AutoModel,  # type: ignore
     ):
@@ -37,7 +38,7 @@ class DefaultModel(Model):
 
         if device == torch.device("hpu"):
             logger.info("Use graph mode for HPU")
-            model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+            model = wrap_in_hpu_graph(model, disable_tensor_cache=disable_tensor_cache)
         self.hidden_size = model.config.hidden_size
         self.vocab_size = model.config.vocab_size
         self.pooling_mode = pool
