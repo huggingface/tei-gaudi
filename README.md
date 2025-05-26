@@ -1,4 +1,9 @@
 # Text Embeddings Inference on Habana Gaudi
+
+> [!WARNING]
+> This repository is deprecated. Please use the [text-embeddings-inference](https://github.com/huggingface/text-embeddings-inference) repository instead for the latest version of TEI on Intel Gaudi. You should now use the latest image hosted on the TEI repo `ghcr.io/huggingface/text-embeddings-inference:hpu-latest` instead of `ghcr.io/huggingface/tei-gaudi:latest`. You can find the new Gaudi images in the [text-embeddings-inference](https://github.com/huggingface/text-embeddings-inference/pkgs/container/text-embeddings-inference) registry. You can also check the [Gaudi Backend documentation](https://huggingface.co/docs/text-embeddings-inference/intel_container#hpu) for more information.
+
+
 ## Table of contents
 - [Get started](#get-started)
 - [Supported Models](#supported-models)
